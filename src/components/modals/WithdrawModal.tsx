@@ -1,170 +1,122 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import useStore from '@/store/useStore';
-import { withdrawFromSubaccount, SPOT_MARKET_INDEXES, type SpotMarketToken } from '@/services/drift';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useWallet } from '@solana/wallet-adapter-react';
+import { withdrawFromSubaccount } from '@/services/drift';
+import { useWallet, useConnection } from '@solana/wallet-adapter-react';
+import { SPOT_MARKET_NAMES } from '@/services/drift';
 
 const WithdrawModal: React.FC = () => {
-  const { connected } = useWallet();
   const { activeModal, setActiveModal, selectedSubaccountIndex, subaccounts } = useStore();
+  const { publicKey, sendTransaction } = useWallet();
+  const { connection } = useConnection();
   const [amount, setAmount] = useState('');
-  const [token, setToken] = useState<SpotMarketToken>('USDC');
+  const [token, setToken] = useState('USDC');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // Reset state when modal opens/closes
-  useEffect(() => {
-    if (activeModal === 'withdraw') {
-      setAmount('');
-      setError('');
-    }
-  }, [activeModal]);
+  const selectedSubaccount = selectedSubaccountIndex !== null
+    ? subaccounts.find(s => s.index === selectedSubaccountIndex)
+    : null;
 
-  // Make sure we have a valid subaccount
-  const selectedSubaccount = subaccounts.find(s => s.index === selectedSubaccountIndex);
   const selectedSpotBalance = selectedSubaccount?.spotBalances.find(b => b.token === token);
-
-  // Check if we have a position
-  const hasPosition = selectedSpotBalance?.hasPosition ?? false;
-  const maxAmount = hasPosition ? selectedSpotBalance.balance : 0;
+  const maxAmount = selectedSpotBalance?.balance || 0;
 
   const handleSetMax = () => {
     setAmount(maxAmount.toString());
   };
 
   const handleWithdraw = async () => {
-    if (!connected) {
-      setError('Please connect your wallet first');
-      return;
-    }
-
-    const parsedAmount = parseFloat(amount);
-    if (isNaN(parsedAmount) || parsedAmount <= 0) {
-      console.log('Amount validation failed:', { amount, parsedAmount });
-      setError('Please enter a valid amount greater than 0');
-      return;
-    }
-
-    if (!token) {
-      console.log('Token validation failed:', { token });
-      setError('Please select a token');
-      return;
-    }
-
-    if (selectedSubaccountIndex === null || selectedSubaccountIndex === undefined) {
-      console.log('Subaccount validation failed:', { selectedSubaccountIndex });
-      setError('Please select a subaccount first');
-      return;
-    }
-
-    if (!selectedSubaccount) {
-      console.log('Selected subaccount not found:', { selectedSubaccountIndex, subaccounts });
-      setError('Selected subaccount not found');
-      return;
-    }
-
-    if (!hasPosition) {
-      setError(`No ${token} position found in this subaccount`);
-      return;
-    }
-
-    if (parsedAmount > maxAmount) {
-      console.log('Amount exceeds balance:', { amount: parsedAmount, maxAmount });
-      setError(`Insufficient balance. Maximum available: ${maxAmount} ${token}`);
-      return;
-    }
+    if (!amount || !token) return;
     
     setError('');
     setLoading(true);
     
     try {
-      console.log('Starting withdraw with:', {
-        subaccountIndex: selectedSubaccountIndex,
-        amount: parsedAmount,
-        token,
-        marketIndex: SPOT_MARKET_INDEXES[token]
-      });
+      const marketIndex = Object.entries(SPOT_MARKET_NAMES).find(
+        ([_, token]) => token === token
+      )?.[0];
 
-      const marketIndex = SPOT_MARKET_INDEXES[token];
+      if (marketIndex === undefined) {
+        throw new Error('Invalid token selected');
+      }
+
       await withdrawFromSubaccount(
-        selectedSubaccountIndex,
-        parsedAmount,
-        marketIndex
+        selectedSubaccountIndex || 0,
+        parseFloat(amount),
+        parseInt(marketIndex)
       );
-      
       setActiveModal(null);
       setAmount('');
-    } catch (error: any) {
+    } catch (error) {
       console.error('Withdraw error:', error);
-      setError(error.message || 'Failed to withdraw. Please try again.');
+      setError('Failed to withdraw. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
-  // Don't render if no subaccount is selected
-  if (selectedSubaccountIndex === null || selectedSubaccountIndex === undefined) {
-    return null;
-  }
-
   return (
-    <Dialog open={activeModal === 'withdraw'} onOpenChange={() => setActiveModal(null)}>
+    <Dialog open={activeModal === 'withdraw'} onOpenChange={() => activeModal === 'withdraw' && setActiveModal(null)}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Withdraw from Subaccount {selectedSubaccountIndex}</DialogTitle>
+          <DialogTitle>Withdraw from Subaccount #{selectedSubaccountIndex}</DialogTitle>
           <DialogDescription>
             Withdraw tokens from your Drift Protocol subaccount.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Token</label>
-            <Select value={token} onValueChange={(value) => setToken(value as SpotMarketToken)}>
+          <div>
+            <label className="block text-sm font-medium mb-2">Token</label>
+            <Select value={token} onValueChange={setToken}>
               <SelectTrigger>
-                <SelectValue placeholder="Select token" />
+                <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {Object.keys(SPOT_MARKET_INDEXES).map((t) => (
-                  <SelectItem key={t} value={t}>
-                    {t}
-                  </SelectItem>
+                {Object.values(SPOT_MARKET_NAMES).map((name) => (
+                  <SelectItem key={name} value={name}>{name}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
 
-          <div className="space-y-2">
-            <div className="flex justify-between">
-              <label className="text-sm font-medium">Amount</label>
-              <span className="text-sm text-muted-foreground">
-                Available: {maxAmount} {token}
-              </span>
-            </div>
-            <div className="flex space-x-2">
+          <div>
+            <label className="block text-sm font-medium mb-2">Amount</label>
+            <div className="relative">
               <Input
                 type="number"
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
                 placeholder="0.00"
-                min="0"
-                step="any"
+                className="w-full px-3 py-2 bg-background border border-border rounded-lg pr-16"
+                disabled={loading}
               />
-              <Button variant="outline" onClick={handleSetMax}>MAX</Button>
+              <Button
+                onClick={handleSetMax}
+                className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-0.5 text-xs bg-primary/10 text-primary rounded hover:bg-primary/20 transition-colors"
+                type="button"
+              >
+                MAX
+              </Button>
             </div>
+            {selectedSpotBalance && (
+              <p className="text-sm text-muted-foreground mt-1">
+                Available: {selectedSpotBalance.balance.toFixed(token === 'USDC' ? 2 : 4)} {token}
+              </p>
+            )}
           </div>
 
           {error && (
-            <div className="text-sm text-destructive">{error}</div>
+            <p className="text-sm text-red-500">{error}</p>
           )}
 
-          <Button 
-            className="w-full" 
-            onClick={handleWithdraw} 
-            disabled={loading || !connected || !hasPosition}
+          <Button
+            onClick={handleWithdraw}
+            disabled={loading || !amount || parseFloat(amount) <= 0 || parseFloat(amount) > maxAmount}
+            className="w-full px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {loading ? 'Withdrawing...' : 'Withdraw'}
           </Button>

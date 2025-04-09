@@ -9,6 +9,7 @@ import { Wallet, LineChart, LayoutGrid, Search } from 'lucide-react';
 import { getSubaccounts, getDriftClient } from '@/services/drift';
 import { PublicKey } from '@solana/web3.js';
 import { Subaccount } from '@/types/drift';
+import { BN } from '@drift-labs/sdk';
 
 // Market names mapping
 const MARKET_NAMES = {
@@ -51,14 +52,21 @@ const Dashboard: React.FC = () => {
 
   // Format number with commas and proper decimal places
   const formatNumber = (value: number, decimals: number = 2) => {
+    // For very small numbers (less than 0.01), show more decimals
+    const effectiveDecimals = Math.abs(value) < 0.01 ? 6 : decimals;
+    
     return new Intl.NumberFormat('en-US', {
-      minimumFractionDigits: decimals,
-      maximumFractionDigits: decimals,
+      minimumFractionDigits: effectiveDecimals,
+      maximumFractionDigits: effectiveDecimals,
+      useGrouping: true,
     }).format(value);
   };
 
   // Set initial wallet mode when connected
   useEffect(() => {
+    if(subaccounts.length > 0 ) {
+      return;
+    }
     if (connected && publicKey) {
       setWalletMode('connected');
     }
@@ -90,6 +98,9 @@ const Dashboard: React.FC = () => {
   };
 
   useEffect(() => {
+    if(subaccounts.length > 0 && walletMode === 'readonly') {
+      return;
+    }
     const fetchAccounts = async () => {
       setLoading(true);
       try {
@@ -102,40 +113,38 @@ const Dashboard: React.FC = () => {
         console.log("Raw Subaccounts:", accounts);
         
         const processedSubaccounts = await Promise.all(accounts.map(async (account, index) => {
-          // Calculate total value from spot positions
           const totalSpotValue = account.spotBalances.reduce((total, spot) => total + spot.value, 0);
+          const totalPerpValue = account.perpPositions.reduce((total, position) => total + position.quoteAssetAmount.toNumber() / 1e9, 0);
+          const unrealizedPnl = account.unrealizedPnl.toNumber() / 1e9;
+
+          // Convert perp positions to Position interface
+          const positions = account.perpPositions
+            .filter(perp => !perp.baseAssetAmount.isZero())
+            .map(perp => {
+              const direction = perp.baseAssetAmount.gt(new BN(0)) ? 'long' as const : 'short' as const;
+              const baseSize = Math.abs(perp.baseAssetAmount.toNumber() / 1e9);
+              const quoteSize = Math.abs(perp.quoteAssetAmount.toNumber() / 1e9);
+              const avgEntryPrice = perp.baseAssetAmount.abs().gt(new BN(0)) 
+                ? perp.quoteAssetAmount.abs().mul(new BN(1e6)).div(perp.baseAssetAmount.abs()).toNumber() / 1e6
+                : 0;
+
+              return {
+                market: `PERP-${perp.marketIndex}`,
+                direction,
+                size: baseSize,
+                leverage: quoteSize > 0 ? baseSize * avgEntryPrice / quoteSize : 0,
+                entryPrice: avgEntryPrice,
+                pnl: (perp.quoteAssetAmount.toNumber() / 1e9) + (perp.settledPnl.toNumber() / 1e9)
+              };
+            });
 
           return {
             index,
-            totalValue: Number(totalSpotValue.toFixed(2)),
+            totalValue: totalSpotValue + totalPerpValue + unrealizedPnl,
             spotBalances: account.spotBalances,
-            positions: account.perpPositions.map((position, marketIndex) => {
-              // Only include positions with some size
-              if (position.baseAssetAmount.isZero()) return null;
-
-              const market = MARKET_NAMES[marketIndex] || `Market ${marketIndex}`; // Use market name or fallback
-              const size = position.baseAssetAmount.toNumber() / 1e9; // Convert to standard units
-              const entryPrice = Math.abs(position.quoteEntryAmount.toNumber()) / Math.abs(position.baseAssetAmount.toNumber());
-              const pnl = position.settledPnl.toNumber() / 1e6;
-              const quoteAmount = Math.abs(position.quoteAssetAmount.toNumber()) / 1e6;
-              
-              const leverage = quoteAmount !== 0
-                ? Math.abs(size * entryPrice) / quoteAmount
-                : 0;
-
-              const direction : "long" | "short" = size > 0 ? 'long' : 'short';
-              
-              return {
-                market,
-                direction,
-                size: Number(size.toFixed(4)),
-                leverage: Number(leverage.toFixed(2)),
-                entryPrice: Number(entryPrice.toFixed(2)),
-                pnl: Number(pnl.toFixed(2)),
-              };
-            }).filter(Boolean), // Remove nulls
-            openOrders: [],
-            pnl: Number((account.settledPerpPnl.toNumber() / 1e6).toFixed(2)),
+            positions,
+            openOrders: [], // We'll need to implement this if needed
+            pnl: unrealizedPnl
           };
         }));
         

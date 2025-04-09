@@ -4,6 +4,7 @@ export interface SpotBalance {
   token: string;
   balance: number;
   value: number;
+  unrealizedPnl: number;
 }
 
 export interface Position {
@@ -13,6 +14,25 @@ export interface Position {
   leverage: number;
   entryPrice: number;
   pnl: number;
+}
+
+export interface PerpPosition {
+  marketIndex: number;
+  baseAssetAmount: BN;
+  quoteAssetAmount: BN;
+  lastCumulativeFundingRate: BN;
+  lastFundingRate: BN;
+  openOrders: number;
+  settledPnl: BN;
+  lpShares: BN;
+  entryPrice: BN;
+  breakEvenPrice: BN;
+}
+
+export interface ProcessedAccount {
+  spotBalances: SpotBalance[];
+  perpPositions: PerpPosition[];
+  unrealizedPnl: BN;
 }
 
 export interface Subaccount {

@@ -78,80 +78,144 @@ export const getSubaccounts = async (walletAddress: string) => {
     
     // Process each account to include spot balances
     const processedAccounts = await Promise.all(accounts.map(async (account) => {
-      // Get oracle prices for all spot markets except USDC
-      const spotMarketPromises = Object.keys(account.spotPositions).map(async (index) => {
-        const marketIndex = parseInt(index);
-        if (marketIndex === 0) return null; // Skip USDC as it doesn't need oracle price
-        try {
-          const oracle = await driftClient.getOracleDataForSpotMarket(marketIndex);
-          console.log(`Oracle price for market ${marketIndex} (${SPOT_MARKET_NAMES[marketIndex]}):`, {
-            raw: oracle.price.toString(),
-            scaled: oracle.price.toNumber() / 1e6
-          });
-          return {
-            marketIndex,
-            oraclePrice: oracle.price.toNumber()
-          };
-        } catch (error) {
-          console.warn(`Failed to get oracle price for market ${marketIndex}:`, error);
-          return null;
-        }
-      });
+      // Get oracle prices for all markets (spot and perp)
+      const marketPromises = [
+        ...Object.keys(account.spotPositions).map(async (index) => {
+          const marketIndex = parseInt(index);
+          if (marketIndex === 0) return null; // Skip USDC
+          try {
+            const oracle = await driftClient.getOracleDataForSpotMarket(marketIndex);
+            return {
+              type: 'spot' as const,
+              marketIndex,
+              oraclePrice: oracle.price
+            };
+          } catch (error) {
+            console.warn(`Failed to get oracle price for spot market ${marketIndex}:`, error);
+            return null;
+          }
+        }),
+        ...account.perpPositions.map(async (position) => {
+          if (position.baseAssetAmount.isZero()) return null;
+          try {
+            const oracle = await driftClient.getOracleDataForPerpMarket(position.marketIndex);
+            return {
+              type: 'perp' as const,
+              marketIndex: position.marketIndex,
+              oraclePrice: oracle.price
+            };
+          } catch (error) {
+            console.warn(`Failed to get oracle price for perp market ${position.marketIndex}:`, error);
+            return null;
+          }
+        })
+      ];
 
-      // Wait for all spot market data
-      const spotMarketData = (await Promise.all(spotMarketPromises))
+      // Wait for all market data
+      const marketData = (await Promise.all(marketPromises))
         .filter(data => data !== null)
         .reduce((acc, data) => {
-          if (data) acc[data.marketIndex] = data.oraclePrice;
+          if (data) {
+            const key = `${data.type}-${data.marketIndex}`;
+            acc[key] = data.oraclePrice;
+          }
           return acc;
-        }, {} as Record<number, number>);
+        }, {} as Record<string, BN>);
+
+      // Calculate unrealized PnL for perp positions
+      let totalUnrealizedPnl = new BN(0);
+      const perpPositions = account.perpPositions
+        .filter(position => !position.baseAssetAmount.isZero())
+        .map(position => {
+          try {
+            const currentPrice = marketData[`perp-${position.marketIndex}`];
+            if (currentPrice && position.baseAssetAmount && position.quoteAssetAmount) {
+              // Calculate entry price from base and quote amounts
+              const baseAbs = position.baseAssetAmount.abs();
+              const quoteAbs = position.quoteAssetAmount.abs();
+              
+              if (baseAbs.gt(new BN(0))) {
+                // Entry price = quote_amount / base_amount (scaled by 1e6)
+                const entryPrice = quoteAbs.mul(new BN(1e6)).div(baseAbs);
+                const priceDiff = currentPrice.sub(entryPrice);
+                const unrealizedPnl = priceDiff.mul(position.baseAssetAmount).div(new BN(1e6));
+                totalUnrealizedPnl = totalUnrealizedPnl.add(unrealizedPnl);
+
+                console.log(`PnL calculation for perp ${position.marketIndex}:`, {
+                  baseAmount: baseAbs.toString(),
+                  quoteAmount: quoteAbs.toString(),
+                  entryPrice: entryPrice.toNumber() / 1e6,
+                  currentPrice: currentPrice.toNumber() / 1e6,
+                  priceDiff: priceDiff.toNumber() / 1e6,
+                  unrealizedPnl: unrealizedPnl.toNumber() / 1e6
+                });
+              }
+            }
+            return position;
+          } catch (error) {
+            console.warn(`Error processing perp position ${position.marketIndex}:`, error);
+            return position;
+          }
+        });
 
       // Process spot positions using the cached market data
       const spotBalances = account.spotPositions
         .map((position, marketIndex) => {
-          if (position.scaledBalance.isZero()) return null;
+          try {
+            if (position.scaledBalance.isZero()) return null;
 
-          const token = SPOT_MARKET_NAMES[marketIndex as keyof typeof SPOT_MARKET_NAMES];
-          // Get the token's native decimals
-          const nativeDecimals = TOKEN_DECIMALS[token as keyof typeof TOKEN_DECIMALS];
-          
-          // Convert BN to string first to preserve precision
-          const scaledBalance = position.scaledBalance.toString();
-          // Handle negative balances by getting absolute value
-          const absBalance = scaledBalance.startsWith('-') ? scaledBalance.slice(1) : scaledBalance;
-          // First convert from Drift's 9 decimals (or 6 for USDC) to native token decimals
-          const driftDecimals = marketIndex === 0 ? 6 : 9;
-          const balance = parseFloat(absBalance) / Math.pow(10, driftDecimals);
-          
-          // For USDC, value is same as balance
-          let value = marketIndex === 0 ? balance : 0;
-          
-          // For other tokens, calculate value based on oracle price
-          if (marketIndex > 0 && spotMarketData[marketIndex]) {
-            // Oracle price comes in with 6 decimals
-            const oraclePrice = spotMarketData[marketIndex] / 1e6;
-            value = balance * oraclePrice;
-            console.log(`Value calculation for ${token}:`, {
-              rawBalance: absBalance,
-              driftDecimals,
-              nativeDecimals,
-              balance,
-              oraclePrice,
-              value
-            });
+            const token = SPOT_MARKET_NAMES[marketIndex as keyof typeof SPOT_MARKET_NAMES];
+            const nativeDecimals = TOKEN_DECIMALS[token as keyof typeof TOKEN_DECIMALS];
+            const driftDecimals = marketIndex === 0 ? 6 : 9;
+            
+            // Use BN for calculations
+            const scaledBalance = position.scaledBalance;
+            const balanceScaleBN = new BN(10).pow(new BN(driftDecimals));
+            const balance = Number(scaledBalance.toString()) / Math.pow(10, driftDecimals);
+            
+            // For USDC, value is same as balance
+            let valueBN = marketIndex === 0 ? scaledBalance : new BN(0);
+            
+            // For other tokens, calculate value based on oracle price
+            if (marketIndex > 0) {
+              const oraclePrice = marketData[`spot-${marketIndex}`];
+              if (oraclePrice) {
+                try {
+                  valueBN = scaledBalance.mul(oraclePrice).div(balanceScaleBN);
+                } catch (error) {
+                  console.warn(`Error calculating value for ${token}:`, error);
+                  valueBN = new BN(0);
+                }
+              }
+            }
+            
+            // Convert to display values with proper precision
+            const preciseBalance = Number(balance.toFixed(8));
+            const preciseValue = Number(valueBN.toString()) / 1e6;
+
+            const balanceDecimals = marketIndex === 0 ? 2 : 
+                                 Math.abs(preciseBalance) < 0.01 ? 6 : 4;
+            const valueDecimals = Math.abs(preciseValue) < 0.01 ? 6 : 
+                               Math.abs(preciseValue) < 1 ? 4 : 2;
+
+            return {
+              token,
+              balance: Number(preciseBalance.toFixed(balanceDecimals)),
+              value: Number(preciseValue.toFixed(valueDecimals)),
+              unrealizedPnl: 0 // Spot positions don't have unrealized PnL
+            };
+          } catch (error) {
+            console.warn(`Error processing spot position ${marketIndex}:`, error);
+            return null;
           }
-
-          return {
-            token,
-            balance: Number(balance.toFixed(marketIndex === 0 ? 2 : 4)), // 2 decimals for USDC, 4 for others
-            value: Number(value.toFixed(2))
-          };
         })
         .filter(Boolean);
 
       return {
         ...account,
-        spotBalances
+        spotBalances,
+        perpPositions,
+        unrealizedPnl: totalUnrealizedPnl
       };
     }));
 

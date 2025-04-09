@@ -1,6 +1,6 @@
 import React from 'react';
 import { Button } from '@/components/ui/button';
-import { WalletButton } from "@/components/WalletButton";
+import WalletButton from '@/components/WalletButton';
 import { ExternalLink } from 'lucide-react';
 
 const Navbar: React.FC = () => {

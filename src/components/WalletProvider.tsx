@@ -1,8 +1,13 @@
 import { FC, ReactNode, useMemo } from 'react';
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
-import { PhantomWalletAdapter, SolflareWalletAdapter } from '@solana/wallet-adapter-wallets';
-import { clusterApiUrl } from '@solana/web3.js';
+import {
+  PhantomWalletAdapter,
+  SolflareWalletAdapter,
+  LedgerWalletAdapter,
+  CloverWalletAdapter,
+} from '@solana/wallet-adapter-wallets';
+import { ConnectionConfig } from '@solana/web3.js';
 
 // Import wallet adapter styles
 import '@solana/wallet-adapter-react-ui/styles.css';
@@ -12,20 +17,27 @@ interface Props {
 }
 
 export const WalletContextProvider: FC<Props> = ({ children }) => {
-  // You can also provide a custom RPC endpoint
-  const endpoint = useMemo(() => clusterApiUrl('mainnet-beta'), []);
+  // Use Helius RPC endpoint for better reliability
+  const endpoint = 'https://rpc.helius.xyz/?api-key=1aec2a6d-3898-4857-b0e4-2d7af1d4f29e';
+  const config: ConnectionConfig = {
+    commitment: 'confirmed',
+    wsEndpoint: 'wss://rpc.helius.xyz/?api-key=1aec2a6d-3898-4857-b0e4-2d7af1d4f29e',
+    confirmTransactionInitialTimeout: 120000, // 2 minutes
+  };
 
   // Initialize wallet adapters
   const wallets = useMemo(
     () => [
       new PhantomWalletAdapter(),
       new SolflareWalletAdapter(),
+      new LedgerWalletAdapter(),
+      new CloverWalletAdapter(),
     ],
     []
   );
 
   return (
-    <ConnectionProvider endpoint={endpoint}>
+    <ConnectionProvider endpoint={endpoint} config={config}>
       <WalletProvider wallets={wallets} autoConnect>
         <WalletModalProvider>{children}</WalletModalProvider>
       </WalletProvider>

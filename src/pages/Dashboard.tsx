@@ -34,19 +34,20 @@ const SPOT_MARKET_NAMES = {
 };
 
 const Dashboard: React.FC = () => {
-  const { 
-    setLoading, 
-    loading,
-    setSubaccounts, 
-    walletMode, 
-    readonlyWalletAddress, 
-    setWalletMode, 
-    setReadonlyWalletAddress, 
-    subaccounts 
-  } = useStore();
   const { publicKey, connected } = useWallet();
+  const { 
+    subaccounts, 
+    setSubaccounts, 
+    loading, 
+    setLoading,
+    walletMode,
+    setWalletMode,
+    readonlyWalletAddress,
+    setReadonlyWalletAddress 
+  } = useStore();
   const [searchInput, setSearchInput] = useState(readonlyWalletAddress || '');
   const [error, setError] = useState('');
+  const [isValidAddress, setIsValidAddress] = useState(true);
 
   // Format number with commas and proper decimal places
   const formatNumber = (value: number, decimals: number = 2) => {
@@ -56,95 +57,104 @@ const Dashboard: React.FC = () => {
     }).format(value);
   };
 
+  // Set initial wallet mode when connected
+  useEffect(() => {
+    if (connected && publicKey) {
+      setWalletMode('connected');
+    }
+  }, [connected, publicKey]);
+
   const clearSearch = () => {
     setSearchInput('');
     setError('');
-    if (walletMode === 'readonly') {
-      setSubaccounts([]);
-      setWalletMode('disconnected');
-      setReadonlyWalletAddress('');
-    }
+    setIsValidAddress(true);
+    setWalletMode('connected');
+    setReadonlyWalletAddress('');
   };
-
-  useEffect(() => {
-    if(subaccounts.length > 0 && walletMode === 'readonly') return;
-    if (connected && publicKey) {
-      setLoading(true);
-      setWalletMode('connected');
-      getData(publicKey.toString());
-    } 
-  }, [connected, publicKey]);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
     
     try {
       // Validate Solana address
       new PublicKey(searchInput);
-      
+      setIsValidAddress(true);
       setLoading(true);
       setWalletMode('readonly');
       setReadonlyWalletAddress(searchInput);
-      await getData(searchInput);
     } catch (error) {
       setError('Invalid Solana address');
+      setIsValidAddress(false);
       console.error("Search error:", error);
     }
   };
 
-  async function getData(walletAddress: string) {
-    try {
-      const subaccounts = await getSubaccounts(walletAddress);
-      console.log("Raw Subaccounts:", subaccounts);
-      
-      const processedSubaccounts = await Promise.all(subaccounts.map(async (account, index) => {
-        // Calculate total value from spot positions
-        const totalSpotValue = account.spotBalances.reduce((total, spot) => total + spot.value, 0);
+  useEffect(() => {
+    const fetchAccounts = async () => {
+      setLoading(true);
+      try {
+        const targetAddress = walletMode === 'readonly' ? readonlyWalletAddress : publicKey?.toBase58();
+        if (!targetAddress) {
+          setSubaccounts([]);
+          return;
+        }
+        const accounts = await getSubaccounts(targetAddress);
+        console.log("Raw Subaccounts:", accounts);
+        
+        const processedSubaccounts = await Promise.all(accounts.map(async (account, index) => {
+          // Calculate total value from spot positions
+          const totalSpotValue = account.spotBalances.reduce((total, spot) => total + spot.value, 0);
 
-        return {
-          index,
-          totalValue: Number(totalSpotValue.toFixed(2)),
-          spotBalances: account.spotBalances,
-          positions: account.perpPositions.map((position, marketIndex) => {
-            // Only include positions with some size
-            if (position.baseAssetAmount.isZero()) return null;
+          return {
+            index,
+            totalValue: Number(totalSpotValue.toFixed(2)),
+            spotBalances: account.spotBalances,
+            positions: account.perpPositions.map((position, marketIndex) => {
+              // Only include positions with some size
+              if (position.baseAssetAmount.isZero()) return null;
 
-            const market = MARKET_NAMES[marketIndex] || `Market ${marketIndex}`; // Use market name or fallback
-            const size = position.baseAssetAmount.toNumber() / 1e9; // Convert to standard units
-            const entryPrice = Math.abs(position.quoteEntryAmount.toNumber()) / Math.abs(position.baseAssetAmount.toNumber());
-            const pnl = position.settledPnl.toNumber() / 1e6;
-            const quoteAmount = Math.abs(position.quoteAssetAmount.toNumber()) / 1e6;
-            
-            const leverage = quoteAmount !== 0
-              ? Math.abs(size * entryPrice) / quoteAmount
-              : 0;
+              const market = MARKET_NAMES[marketIndex] || `Market ${marketIndex}`; // Use market name or fallback
+              const size = position.baseAssetAmount.toNumber() / 1e9; // Convert to standard units
+              const entryPrice = Math.abs(position.quoteEntryAmount.toNumber()) / Math.abs(position.baseAssetAmount.toNumber());
+              const pnl = position.settledPnl.toNumber() / 1e6;
+              const quoteAmount = Math.abs(position.quoteAssetAmount.toNumber()) / 1e6;
+              
+              const leverage = quoteAmount !== 0
+                ? Math.abs(size * entryPrice) / quoteAmount
+                : 0;
 
-            const direction : "long" | "short" = size > 0 ? 'long' : 'short';
-            
-            return {
-              market,
-              direction,
-              size: Number(size.toFixed(4)),
-              leverage: Number(leverage.toFixed(2)),
-              entryPrice: Number(entryPrice.toFixed(2)),
-              pnl: Number(pnl.toFixed(2)),
-            };
-          }).filter(Boolean), // Remove nulls
-          openOrders: [],
-          pnl: Number((account.settledPerpPnl.toNumber() / 1e6).toFixed(2)),
-        };
-      }));
-      
-      setSubaccounts(processedSubaccounts);
-      setLoading(false);
-    } catch (error) {
-      console.error("Error fetching subaccounts:", error);
-      setSubaccounts([]);
-    } finally {
-      setLoading(false);
+              const direction : "long" | "short" = size > 0 ? 'long' : 'short';
+              
+              return {
+                market,
+                direction,
+                size: Number(size.toFixed(4)),
+                leverage: Number(leverage.toFixed(2)),
+                entryPrice: Number(entryPrice.toFixed(2)),
+                pnl: Number(pnl.toFixed(2)),
+              };
+            }).filter(Boolean), // Remove nulls
+            openOrders: [],
+            pnl: Number((account.settledPerpPnl.toNumber() / 1e6).toFixed(2)),
+          };
+        }));
+        
+        setSubaccounts(processedSubaccounts);
+      } catch (error) {
+        console.error("Error fetching subaccounts:", error);
+        setSubaccounts([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    // Fetch accounts when wallet changes or search is performed
+    if (connected && publicKey && walletMode === 'connected') {
+      fetchAccounts();
+    } else if (walletMode === 'readonly' && readonlyWalletAddress) {
+      fetchAccounts();
     }
-  }
+  }, [publicKey, connected, walletMode, readonlyWalletAddress]);
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -172,7 +182,9 @@ const Dashboard: React.FC = () => {
                   placeholder="Search by wallet address..."
                   value={searchInput}
                   onChange={(e) => setSearchInput(e.target.value)}
-                  className="w-full pl-9 pr-10 py-2 bg-card/50 backdrop-blur-sm border border-border/50 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50"
+                  className={`w-full pl-9 pr-10 py-2 bg-card/50 backdrop-blur-sm border ${
+                    isValidAddress ? 'border-border/50' : 'border-red-500'
+                  } rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50`}
                   disabled={loading}
                 />
                 {loading ? (
@@ -193,11 +205,14 @@ const Dashboard: React.FC = () => {
                 )}
               </div>
               {error && <p className="text-red-500 text-sm mt-1">{error}</p>}
+              {!isValidAddress && (
+                <p className="text-sm text-red-500 mt-1">Invalid wallet address</p>
+              )}
             </div>
             <button
               type="submit"
               className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              disabled={loading || !searchInput}
+              disabled={loading || !searchInput || !isValidAddress}
             >
               {loading ? 'Searching...' : 'Search'}
             </button>

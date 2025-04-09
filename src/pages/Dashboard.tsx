@@ -98,9 +98,7 @@ const Dashboard: React.FC = () => {
   };
 
   useEffect(() => {
-    if(subaccounts.length > 0 && walletMode === 'readonly') {
-      return;
-    }
+   
     const fetchAccounts = async () => {
       setLoading(true);
       try {

@@ -1,0 +1,110 @@
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 222 47% 11%;
+    --foreground: 210 40% 98%;
+
+    --card: 222 47% 14%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222 47% 14%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 221 83% 53%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 222 47% 18%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 222 47% 14%;
+    --muted-foreground: 215 20% 75%;
+
+    --accent: 222 47% 14%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 62% 65%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 222 47% 18%;
+    --input: 222 47% 16%;
+    --ring: 224 76% 48%;
+
+    --radius: 0.5rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  
+  html, body {
+    @apply antialiased h-full;
+    font-family: 'Inter', sans-serif;
+  }
+  
+  body {
+    @apply bg-background text-foreground;
+    background-image: radial-gradient(circle at 50% 0%, rgba(56, 102, 233, 0.075) 0%, transparent 60%);
+    background-attachment: fixed;
+  }
+  
+  #root {
+    @apply h-full;
+  }
+
+  /* Status indicators */
+  .status-success {
+    @apply text-emerald-400;
+  }
+  
+  .status-error {
+    @apply text-rose-400;
+  }
+  
+  .status-warning {
+    @apply text-amber-400;
+  }
+  
+  .status-inactive {
+    @apply text-muted-foreground;
+  }
+  
+  /* Card styles */
+  .card-hover {
+    @apply transition-all duration-200 hover:shadow-lg hover:shadow-primary/10 hover:border-primary/40;
+  }
+  
+  /* Balance indicators */
+  .balance-positive {
+    @apply text-emerald-400;
+  }
+  
+  .balance-negative {
+    @apply text-rose-400;
+  }
+}
+
+@layer components {
+  .container-padding {
+    @apply px-4 sm:px-6 lg:px-8;
+  }
+  
+  .subaccount-grid {
+    @apply grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5;
+  }
+
+  .glass-card {
+    @apply bg-card/80 backdrop-blur-sm border border-white/5 shadow-xl;
+  }
+  
+  .nav-glow {
+    @apply relative after:absolute after:inset-0 after:-z-10 after:h-full after:w-full after:bg-gradient-to-r from-primary/0 via-primary/10 to-primary/0 after:blur-xl;
+  }
+}
